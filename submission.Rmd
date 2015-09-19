@@ -1,0 +1,126 @@
+---
+title: "Practical Machine Learning - Activity Quality Prediction"
+author: "Daniel, Yiquan Zhou"
+date: "Sunday, September 20, 2015"
+output: html_document
+---
+
+## Introduction  
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement - a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. In this project, the goal is to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants. They were asked to perform barbell lifts correctly and incorrectly in 5 different ways.
+
+## Methods  
+### Getting data
+The data for this project come from this source: http://groupware.les.inf.puc-rio.br/har. Six young health participants were asked to perform one set of 10 repetitions of the Unilateral Dumbbell Biceps Curl in five different fashions: exactly according to the specification (Class A), throwing the elbows to the front (Class B), lifting the dumbbell only halfway (Class C), lowering the dumbbell only halfway (Class D) and throwing the hips to the front (Class E).
+The data were recorded from accelerometers. We downloaded [pml-training.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-training.csv) and [pml-testing.csv](https://d396qusza40orc.cloudfront.net/predmachlearn/pml-testing.csv) datasets on 26 Jan 2015.
+
+```{r }
+set.seed(111)
+library(caret, quietly = T)
+setwd("C:\\Coursera\\Practical Machine Learning")
+data <- read.csv("data\\pml-training.csv", na.strings = "NA", header = T)
+data <- data[sample(nrow(data)), ]
+inTrain <- createDataPartition(data$X, p = 0.7)[[1]]
+train <- data[inTrain, ]
+valid <- data[-inTrain, ]
+test <- read.csv("data\\pml-testing.csv", na.strings = "NA", header = T)
+```
+
+### Cleaning data
+This step is to remove columns that are mostly NAs.
+```{r }
+idx2remove <- function(df){
+  idx <- c()
+  for (i in 1:dim(df)[2]){
+    if (sum(is.na(df[, i]))/dim(df)[1] > 0.1) idx <- c(idx, i)
+  }
+  return(idx)
+}
+col.to.remove <- unique(c(idx2remove(train), idx2remove(valid), idx2remove(test)))
+
+trainC <- train$classe
+train <- train[, -c(col.to.remove)]
+
+validC <- valid$classe
+valid <- valid[, -c(col.to.remove)]
+
+testC <- test$problem_id
+test <- test[, -c(col.to.remove)]
+train <- train[, sapply(train, is.numeric)]
+valid <- valid[, sapply(valid, is.numeric)]
+test <- test[, sapply(test, is.numeric)]
+```
+
+This step is to remove columns with high correlation (correlation over 0.9).
+```{r }
+num.idx <- which(sapply(train, class) == "numeric")
+descrCorr <- abs(cor(train[, num.idx]))
+highCorr <- findCorrelation(descrCorr, 0.9)
+highCorrCol <- dimnames(descrCorr[, highCorr])[[2]]
+train <- train[, !names(train) %in% c(highCorrCol, "X", "cvtd_timestamp", "raw_timestamp_part_1",  "raw_timestamp_part_2",  "num_window", "classe")]
+valid <-valid[, !names(valid) %in% c(highCorrCol, "X", "cvtd_timestamp", "raw_timestamp_part_1",  "raw_timestamp_part_2",	"num_window", "classe")]
+test <- test[, !names(test) %in% c(highCorrCol, "X", "cvtd_timestamp", "raw_timestamp_part_1",  "raw_timestamp_part_2",	"num_window", "problem_id")]
+train <- sapply(train, as.numeric)
+valid <- sapply(valid, as.numeric)
+test <- as.matrix(sapply(test, as.numeric))
+```
+
+### Statistical Modeling
+As input data is high-dimensional, Random Forest from the __randomForest__ package is chosen to building a predictive model. We built the model for the outcome variable *classe* using 49 predictive variables. 
+```{r }
+library(randomForest, quietly = T)
+fitRF <- randomForest(x = train, y = trainC, importance = T, ntree = 317)
+fitRF
+```
+Here we can see 5 the most important variables
+```{r fig1, fig.width = 8, fig.height = 4}
+varImpPlot(fitRF, n.var = 5, type = 1, main = "Fig. 1. Variable Importance")
+```
+With number of trees of 317 the Random Forest was successfully trained and the estimated OOB error rate (in sample error) for the training set was 0.52%. We don't need to do cross-validation as random forest uses bootstrap samples from the train set.
+
+### Results
+On the fig. 1 we can see the most important variables for the predicting model: yaw_belt, roll_belt, pitch_belt.
+
+Let's plot the three variables. On the figures 2-4 we can see the relationship between those variables. We color grouped the points based on the 5 levels of activities quality. The figures show rather complicated patterns which cannot be linearly separated, thus, we used random forest.
+
+```{r fig2-4, fig.width = 11, fig.height = 8}
+par(mfrow=c(2,2))
+valid <- data.frame(valid)
+plot(valid$yaw_belt, valid$roll_belt,
+     xlab = "Yaw belt", 
+     ylab = "Roll belt", 
+     main = "Fig. 2", col = as.numeric(validC), pch = 19, cex = .5)
+
+plot(valid$yaw_belt,valid$pitch_belt,
+     xlab = "Yaw belt", 
+     ylab = "Pitch belt", 
+     main = "Fig. 3", col = as.numeric(validC), pch = 19, cex = .5)
+
+plot(valid$roll_belt,valid$pitch_belt,
+     xlab = "Roll belt", 
+     ylab = "Pitch belt", 
+     main = "Fig. 4", col = as.numeric(validC), pch = 19, cex = .5)
+plot.new()
+legend("center", legend = levels(validC), cex = 2, text.col = seq_along(levels(validC)))
+```
+We tested out model on validation set and observed a confusion matrix for the validation set.
+```{r }
+predRF <- predict(fitRF, valid)
+confusionMatrix(predRF, validC)
+```
+Out of sample error is about 0.37%. Finally we tested our model on the 20 test cases available in the test data. We got 100% prediction accuracy.
+```{r , eval = FALSE}
+predRFT <- predict(fitRF, test)
+answer <- as.character(predRFT)
+pml_write_files <- function(x){
+  n <- length(x)
+  for(i in 1:n){
+    filename <- paste0("problem_id_", i, ".txt")
+    write.table(x[i], file <- filename, quote = FALSE, row.names = FALSE, col.names = FALSE)
+  }
+}
+pml_write_files(answer)
+```
+
+### Conclusions
+In this paper we proposed a predictive model based on Random Forest. This model provides high accuracy in identifying of activity quality. 
+
